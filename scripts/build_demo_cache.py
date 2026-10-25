@@ -43,6 +43,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from invoice_extract.eval.metrics import compare_documents  # noqa: E402
+from invoice_extract.eval.ocr_metrics import score_document  # noqa: E402
 from invoice_extract.models.postprocess import (  # noqa: E402
     check_arithmetic,
     finalize,
@@ -70,12 +71,21 @@ DEMO_FIELDS = [
 ]
 
 
-def gold_text(corpus: Path, row: dict) -> str | None:
+def gold_words(corpus: Path, row: dict) -> list[dict] | None:
+    """The renderer's word-level ground truth for one rendered page."""
     path = row.get("ocr_gold_path")
     if not path or not (corpus / path).exists():
         return None
-    gold = json.loads((corpus / path).read_text(encoding="utf-8"))
-    return reading_order_text(gold["words"], lambda w: tuple(w["bbox"]), lambda w: w["text"])
+    return json.loads((corpus / path).read_text(encoding="utf-8"))["words"]
+
+
+def words_to_text(words: list[dict]) -> str:
+    return reading_order_text(words, lambda w: tuple(w["bbox"]), lambda w: w["text"])
+
+
+def gold_text(corpus: Path, row: dict) -> str | None:
+    words = gold_words(corpus, row)
+    return None if words is None else words_to_text(words)
 
 
 def score_fields(gold_doc: dict, pred_doc: dict) -> dict:
@@ -193,6 +203,36 @@ def build_corpus(
                 if engine is not None:
                     t0 = time.perf_counter()
                     recognised = engine.recognize(result.image)
+                    elapsed = round((time.perf_counter() - t0) * 1000)
+
+                    # Score this run against the renderer's word-level truth,
+                    # exactly as run_preprocess_ablation.py does: the gold boxes
+                    # are mapped through the same geometric transform the
+                    # pipeline applied, so deskew/crop do not count as misses.
+                    #
+                    # Both metrics are cached deliberately. Phase 1 found they
+                    # disagree -- cleanup nudges character error the wrong way
+                    # while raising word accuracy sharply -- and showing only
+                    # the flattering one would be picking the metric to fit the
+                    # story. See docs/phase1_preprocessing.md.
+                    truth = gold_words(corpus, row)
+                    scores: dict[str, float | None] = {"cer_norm": None, "word_accuracy": None}
+                    if truth:
+                        mapped = result.map_boxes([tuple(w["bbox"]) for w in truth])
+                        report = score_document(
+                            doc_id=doc_id,
+                            gold_text=words_to_text(truth),
+                            pred_text=recognised.text,
+                            gold_boxes=[(w["text"], b) for w, b in zip(truth, mapped, strict=True)],
+                            pred_boxes=[(w.text, w.bbox) for w in recognised.words],
+                            elapsed_ms=elapsed,
+                            preprocess_ms=result.total_ms,
+                        )
+                        scores = {
+                            "cer_norm": round(report.cer_norm, 4),
+                            "word_accuracy": round(report.detection.word_accuracy, 4),
+                        }
+
                     ocr[key] = {
                         "words": [
                             {
@@ -203,12 +243,19 @@ def build_corpus(
                             for w in recognised.words
                         ],
                         "text": recognised.text,
-                        "ms": round((time.perf_counter() - t0) * 1000),
+                        "ms": elapsed,
                         "engine": recognised.engine,
+                        **scores,
                     }
+                    scored = (
+                        f", word-acc {scores['word_accuracy']:.3f}"
+                        f", CER {scores['cer_norm']:.3f}"
+                        if scores["word_accuracy"] is not None
+                        else ""
+                    )
                     print(
                         f"    {doc_id} {key}: {len(recognised.words)} words "
-                        f"in {ocr[key]['ms'] / 1000:.0f}s",
+                        f"in {ocr[key]['ms'] / 1000:.0f}s{scored}",
                         file=sys.stderr,
                     )
 

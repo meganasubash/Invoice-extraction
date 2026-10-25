@@ -41,6 +41,12 @@ uv venv && source .venv/bin/activate   # or: python -m venv .venv && source .ven
 uv pip install -e ".[dev]"
 pre-commit install
 
+# Optional extras. Install [paddle] on its own -- it brings its own opencv
+# (opencv-contrib-python, pinned by paddlex) that collides with the headless
+# wheel in [ocr]; see the note in pyproject.toml.
+uv pip install -e ".[demo]"      # streamlit, needed by `make demo`
+uv pip install -e ".[paddle]"    # PaddleOCR, the primary engine
+
 # Verify schema + harness end to end (no external data, no OCR engine needed)
 make validate-schema
 make eval-smoke

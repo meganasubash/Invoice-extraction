@@ -178,7 +178,11 @@ if screen.startswith("1"):
         profile = st.select_slider(
             "Scan damage",
             options=[p for p in ["clean", "medium", "heavy"] if p in doc["profiles"]],
-            value="medium" if "medium" in doc["profiles"] else doc["profiles"][0],
+            # Opens on the worst case. At 'medium' the damage is subtle enough
+            # that the two panes look nearly identical, which undersells what
+            # the pipeline is for -- the scanner frame, the skew and the
+            # lighting falloff only really bite at 'heavy'.
+            value="heavy" if "heavy" in doc["profiles"] else doc["profiles"][-1],
         )
     with col_b:
         config = st.selectbox("Cleanup applied", index["demo_configs"], index=3)
@@ -196,6 +200,50 @@ if screen.startswith("1"):
             st.image(img, use_container_width=True)
         else:
             not_run(f"no cached preprocessing for {profile} / {config}")
+
+    # The pictures are suggestive; these numbers are the claim. Both runs are
+    # real OCR on the two images above, scored in the cache against the
+    # renderer's word-level ground truth. Shown only when both were run.
+    raw_run = doc["ocr"].get(f"{profile}__raw")
+    clean_run = doc["ocr"].get(f"{profile}__{config}")
+    st.markdown("### Did the cleanup actually help?")
+    if raw_run and clean_run and raw_run.get("word_accuracy") is not None:
+        acc_before, acc_after = raw_run["word_accuracy"], clean_run["word_accuracy"]
+        cer_before, cer_after = raw_run["cer_norm"], clean_run["cer_norm"]
+        c1, c2 = st.columns(2)
+        c1.metric(
+            "Word accuracy — as scanned",
+            f"{acc_before:.1%}",
+            help="Share of words OCR both located and read correctly.",
+        )
+        c2.metric(
+            f"Word accuracy — after {config}",
+            f"{acc_after:.1%}",
+            delta=f"{acc_after - acc_before:+.1%}",
+        )
+        c3, c4 = st.columns(2)
+        c3.metric("Character error — as scanned", f"{cer_before:.3f}")
+        c4.metric(
+            f"Character error — after {config}",
+            f"{cer_after:.3f}",
+            delta=f"{cer_after - cer_before:+.3f}",
+            delta_color="inverse",
+        )
+        st.markdown(
+            "**Watch these two disagree.** Word accuracy is the one that matters: it "
+            "counts words OCR *located* and read right, and a field is only extractable "
+            "if you know where it sits on the page. Character error can move the wrong "
+            "way while accuracy climbs, because OCR reads a crooked page fine — it just "
+            "reports the wrong position. That split is the Phase 1 finding, not a "
+            "rounding artefact; screen 5 has it across the full ablation."
+        )
+    else:
+        not_run(
+            f"OCR was not cached for both `{profile}__raw` and `{profile}__{config}`, "
+            "so there is nothing measured to compare. Rebuild with both:\n\n"
+            "```\npython scripts/build_demo_cache.py "
+            f"--ocr-profiles {profile} --ocr-configs raw '{config}'\n```"
+        )
 
     st.markdown("---")
     st.markdown(
@@ -420,13 +468,29 @@ else:
             st.markdown("\n".join(rows))
             st.caption(note)
 
-        st.markdown(
-            "**The two metrics disagree, and that is the finding.** On heavily damaged "
-            "pages, straightening raises word accuracy from 0.27 to 0.48 while nudging "
-            "character error the wrong way. OCR reads a crooked page fine — it just "
-            "reports the wrong *location*, and location is what tells you which field a "
-            "number belongs to. Both original Phase 1 targets failed; they were written "
-            "against the wrong metric."
+        # Read the headline figures off the table rather than hard-coding them.
+        # Prose and table drifting apart is the fastest way to lose an audience:
+        # whoever checks one against the other stops believing either.
+        worst = profiles[-1]
+        on_worst = [r for r in phase1["results"] if r["profile"] == worst]
+        base = next((r for r in on_worst if r["config"] == "raw"), None)
+        best = max(on_worst, key=lambda r: r["word_accuracy"]) if on_worst else None
+        if base and best:
+            st.markdown(
+                "**The two metrics disagree, and that is the finding.** On `"
+                f"{worst}` pages, cleanup takes word accuracy from "
+                f"**{base['word_accuracy']:.3f}** to **{best['word_accuracy']:.3f}** "
+                f"(`{best['config']}`) while character error moves from "
+                f"{base['cer_norm']:.3f} to {best['cer_norm']:.3f}. OCR reads a crooked "
+                "page fine — it just reports the wrong *location*, and location is what "
+                "tells you which field a number belongs to. Both original Phase 1 targets "
+                "failed; they were written against the wrong metric."
+            )
+
+        n_docs = max((r.get("n_docs") or 0) for r in phase1["results"])
+        st.caption(
+            f"Engine: {phase1.get('engine', 'unknown')} · {n_docs} document(s) per cell · "
+            f"IoU threshold {phase1.get('iou_threshold', 0.5)}"
         )
     else:
         not_run("phase 1 ablation results are not in the cache")
@@ -438,8 +502,9 @@ else:
   not photographed. Real scans (SROIE) are the next acquisition.
 - FATURA2 does **not annotate line items**, so that criterion is only verified on
   our own data.
-- The Phase 1 ablation used **4 documents per cell** — the 21-point deskew effect
-  is large enough to trust; the small character-error differences are not.
+- The Phase 1 ablation runs **few documents per cell** (the count is printed under
+  the tables above) — the deskew effect is large enough to survive that; the small
+  character-error differences are not.
 - Anything labelled *gold text* is a **perfect-OCR ceiling**, not an end-to-end
   result.
         """)

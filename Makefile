@@ -1,4 +1,9 @@
-.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 fatura2 fatura2-audit fatura2-eval \n	demo demo-cache demo-cache-fast demo-vlm-payload demo-vlm-merge \n	docker-build docker-up
+.PHONY: install dev-install ocr-install paddle-install demo-install\
+	lint format test validate-schema eval-smoke\
+	corpus corpus-full ablation ablation-smoke figure phase1\
+	extract extract-ablation phase2 fatura2 fatura2-audit fatura2-eval\
+	demo demo-cache demo-cache-fast demo-vlm-payload demo-vlm-merge\
+	docker-build docker-up
 
 install:
 	uv pip install --system -e .
@@ -12,8 +17,15 @@ dev-install:
 ocr-install:
 	uv pip install --system -e ".[ocr]"
 
+# Install this INSTEAD OF ocr-install, not after it: paddlex pins
+# opencv-contrib-python, which unpacks into the same cv2/ directory as the
+# headless wheel above and aborts the install mid-transaction on Windows.
 paddle-install:
 	uv pip install --system -e ".[paddle]"
+
+# The demo UI. Kept out of the core deps so schema/eval work installs fast.
+demo-install:
+	uv pip install --system -e ".[demo]"
 
 lint:
 	ruff check .

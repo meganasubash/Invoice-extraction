@@ -33,6 +33,13 @@ ocr = [
     # Phase 1: preprocessing + OCR. opencv/scikit-image do the image work;
     # pytesseract and paddleocr are thin wrappers over engines that must also
     # be installed at system level (see docs/phase1_preprocessing.md).
+    #
+    # Do NOT install this alongside [paddle]: paddlex pins
+    # opencv-contrib-python==4.10.0.84, which unpacks into the same cv2/
+    # directory as the headless wheel. pip cannot resolve that -- on Windows it
+    # aborts mid-transaction with "Access is denied: cv2.pyd", leaving the env
+    # half-installed. For the paddle path use [paddle] on its own; contrib
+    # ships the same cv2 module preprocess/ and degrade/ import.
     "opencv-python-headless>=4.9",
     "scikit-image>=0.22",
     "pytesseract>=0.3.10",
@@ -40,8 +47,17 @@ ocr = [
     "PyMuPDF>=1.24",
 ]
 paddle = [
+    # Self-sufficient: paddlex pulls opencv-contrib-python, which supplies the
+    # cv2 module this code imports. See the collision note in [ocr] before
+    # combining the two.
     "paddleocr>=2.7",
     "paddlepaddle>=2.6",
+]
+
+demo = [
+    # demo/app.py only. Deliberately not a core dependency -- schema, dataset
+    # and eval work need none of it -- but `make demo` is dead without it.
+    "streamlit>=1.35",
 ]
 vlm = [
     # Heavy deps needed only for actual model inference (Colab/Kaggle), not for
